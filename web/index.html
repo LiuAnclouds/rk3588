@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mine Pedestrian Vision Stream</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      --bg: #050607;
+      --line: #273640;
+      --text: #edf5f7;
+      --muted: #9aaab3;
+      --cyan: #4bd8e7;
+      --green: #66d37c;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr);
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #0b1115;
+      font-size: 13px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 16px rgba(102, 211, 124, 0.75);
+    }
+
+    .hint {
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .hint b { color: var(--cyan); font-weight: 700; }
+
+    .stage {
+      min-width: 0;
+      min-height: 0;
+      background: #020303;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    @media (max-width: 760px) {
+      .bar { height: auto; min-height: 42px; align-items: flex-start; flex-direction: column; padding: 9px 12px; }
+      .shell { grid-template-rows: auto minmax(0, 1fr); }
+      .hint { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="bar">
+      <div class="brand"><span class="dot"></span>Mine Pedestrian Vision Stream</div>
+      <div class="hint">Direct MJPEG: <b id="url"></b></div>
+    </header>
+    <section class="stage">
+      <img id="stream" alt="MJPEG stream">
+    </section>
+  </main>
+  <script>
+    const streamUrl = `http://${location.hostname}:8090/stream`;
+    document.getElementById('url').textContent = streamUrl;
+    document.getElementById('stream').src = streamUrl;
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Build outputs
+bin/
+
+# Runtime outputs
+outputs/
+logs/
+web/live_result.jpg
+web/live_targets.json
+MvSdkLog/
+$(ALLUSERSPROFILE)/
+
+# Large model/runtime artifacts, keep them on the board or release assets.
+models/*.rknn
+lib/*.so
+
+# Python/cache/editor noise
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
