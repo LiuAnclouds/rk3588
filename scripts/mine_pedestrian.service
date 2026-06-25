@@ -1,12 +1,13 @@
 [Unit]
 Description=Mine Pedestrian Vision Service
-After=network.target multi-user.target
-Wants=network.target
+After=network.target network-online.target multi-user.target
+Wants=network.target network-online.target
 
 [Service]
 Type=forking
 User=orangepi
 WorkingDirectory=/home/orangepi/moonxkj/mine_pedestrian
+ExecStartPre=/bin/sleep 3
 ExecStart=/home/orangepi/moonxkj/mine_pedestrian/scripts/mine_control start
 ExecStop=/home/orangepi/moonxkj/mine_pedestrian/scripts/mine_control stop
 Restart=on-failure

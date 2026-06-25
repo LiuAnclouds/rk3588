@@ -94,7 +94,7 @@ cmd_start() {
 
   if [[ "${SERIAL_ENABLED:-0}" == "1" ]]; then
     echo "Starting RS485 transmitter..."
-    cmd_serial_start
+    cmd_serial start
   fi
   echo "Done."
 }
