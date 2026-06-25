@@ -98,16 +98,22 @@
   <main class="shell">
     <header class="bar">
       <div class="brand"><span class="dot"></span>Mine Pedestrian Vision Stream</div>
-      <div class="hint">Direct MJPEG: <b id="url"></b></div>
+      <div class="hint">MJPEG: <b id="url"></b></div>
     </header>
     <section class="stage">
       <img id="stream" alt="MJPEG stream">
     </section>
   </main>
   <script>
-    const streamUrl = `http://${location.hostname}:8090/stream`;
-    document.getElementById('url').textContent = streamUrl;
-    document.getElementById('stream').src = streamUrl;
+    var streamPort = 8090;
+    var streamConfig = new URLSearchParams(window.location.search);
+    if (streamConfig.has("port")) {
+      streamPort = streamConfig.get("port");
+    }
+    var streamIp = streamConfig.get("ip") || location.hostname;
+    var streamUrl = "http://" + streamIp + ":" + streamPort + "/stream";
+    document.getElementById("url").textContent = streamUrl;
+    document.getElementById("stream").src = streamUrl;
   </script>
 </body>
 </html>

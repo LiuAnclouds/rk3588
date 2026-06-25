@@ -1,0 +1,352 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="/home/orangepi/moonxkj/mine_pedestrian"
+CONFIG_FILE="$PROJECT_DIR/config/mine_config.conf"
+RS485_SCRIPT="$PROJECT_DIR/scripts/mine_rs485.py"
+
+detect_wifi_ip() {
+  local iface wifi_ip
+  wifi_ip=""
+  for iface in wlan0 wlp1s0 wlp2s0 wlp3s0; do
+    if ip -4 addr show dev "$iface" 2>/dev/null | grep -q 'inet '; then
+      wifi_ip=$(ip -4 addr show dev "$iface" | grep -oP 'inet \K[\d.]+' | head -1)
+      break
+    fi
+  done
+  if [[ -z "$wifi_ip" ]]; then
+    wifi_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  fi
+  echo "${wifi_ip:-}"
+}
+
+ensure_config() {
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    cat > "$CONFIG_FILE" <<EOF
+# Mine Pedestrian Config
+STREAM_IP=$(detect_wifi_ip)
+MJPEG_PORT=8090
+WEB_PORT=8080
+CAMERA_INDEX=0
+MODEL_PATH=$PROJECT_DIR/models/current_seg.rknn
+SERIAL_DEV=/dev/ttyUSB0
+SERIAL_BAUD=115200
+SERIAL_ENABLED=0
+WRITE_SNAPSHOT=0
+EOF
+    echo "Config initialized at $CONFIG_FILE"
+  fi
+}
+
+load_config() {
+  ensure_config
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+}
+
+save_config_var() {
+  local key="$1" val="$2"
+  ensure_config
+  if grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$CONFIG_FILE"
+  else
+    echo "${key}=${val}" >> "$CONFIG_FILE"
+  fi
+}
+
+cmd_status() {
+  load_config
+  echo "========== Mine Pedestrian Status =========="
+  printf "  %-13s %s\n" "Stream IP:" "${STREAM_IP:-not set}"
+  printf "  %-13s %s\n" "MJPEG Port:" "${MJPEG_PORT:-8090}"
+  printf "  %-13s %s\n" "Web Port:" "${WEB_PORT:-8080}"
+  printf "  %-13s %s\n" "Camera Idx:" "${CAMERA_INDEX:-0}"
+  printf "  %-13s %s\n" "Model:" "${MODEL_PATH:-}"
+  printf "  %-13s %s\n" "Serial Dev:" "${SERIAL_DEV:-}"
+  printf "  %-13s %s\n" "Serial Baud:" "${SERIAL_BAUD:-115200}"
+  printf "  %-13s %s\n" "Serial Tx:" "$([[ "${SERIAL_ENABLED:-0}" == "1" ]] && echo "ON" || echo "OFF")"
+  echo "---------------------------------------------"
+  if pgrep -f "mine_live_infer" > /dev/null; then
+    printf "  %-13s %s\n" "Live Infer:" "RUNNING ($(pgrep -c -f mine_live_infer) proc)"
+  else
+    printf "  %-13s %s\n" "Live Infer:" "STOPPED"
+  fi
+  if pgrep -f "mine_rs485.py" > /dev/null; then
+    printf "  %-13s %s\n" "RS485 Tx:" "RUNNING"
+  else
+    printf "  %-13s %s\n" "RS485 Tx:" "STOPPED"
+  fi
+  if pgrep -f "python3 -m http.server ${WEB_PORT:-8080}" > /dev/null; then
+    printf "  %-13s %s\n" "Web Server:" "RUNNING (:${WEB_PORT:-8080})"
+  else
+    printf "  %-13s %s\n" "Web Server:" "STOPPED"
+  fi
+  echo "============================================="
+}
+
+cmd_start() {
+  load_config
+  echo "Starting Mine Pedestrian services..."
+  STREAM_IP="${STREAM_IP}" MJPEG_PORT="${MJPEG_PORT}" WEB_PORT="${WEB_PORT}" \
+    MODEL="${MODEL_PATH}" WRITE_SNAPSHOT="${WRITE_SNAPSHOT}" \
+    "$PROJECT_DIR/scripts/run_live_web.sh"
+
+  if [[ "${SERIAL_ENABLED:-0}" == "1" ]]; then
+    echo "Starting RS485 transmitter..."
+    cmd_serial_start
+  fi
+  echo "Done."
+}
+
+cmd_stop() {
+  echo "Stopping all services..."
+  "$PROJECT_DIR/scripts/stop_live_web.sh"
+  pkill -f "mine_rs485.py" 2>/dev/null || true
+  echo "All stopped."
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start
+}
+
+cmd_ip() {
+  local action="${1:-show}"
+  load_config
+  case "$action" in
+    show)
+      echo "Stream IP : ${STREAM_IP:-not set}"
+      echo "WiFi IP   : $(detect_wifi_ip)"
+      ;;
+    set)
+      if [[ -z "${2:-}" ]]; then
+        echo "Usage: $0 ip set <ip_address>" >&2
+        return 1
+      fi
+      save_config_var "STREAM_IP" "$2"
+      echo "Stream IP set to: $2"
+      echo "Note: restart service for changes to take effect"
+      ;;
+    auto)
+      local wifi_ip
+      wifi_ip=$(detect_wifi_ip)
+      if [[ -z "$wifi_ip" ]]; then
+        echo "ERROR: No WiFi IP detected" >&2
+        return 1
+      fi
+      save_config_var "STREAM_IP" "$wifi_ip"
+      echo "Stream IP auto-set to: $wifi_ip"
+      ;;
+    *)
+      echo "Usage: $0 ip {show|set <ip>|auto}" >&2
+      return 1
+      ;;
+  esac
+}
+
+cmd_port() {
+  local action="${1:-show}"
+  load_config
+  case "$action" in
+    show)
+      echo "MJPEG Port: ${MJPEG_PORT:-8090}"
+      echo "Web Port  : ${WEB_PORT:-8080}"
+      ;;
+    set)
+      if [[ -z "${3:-}" ]]; then
+        echo "Usage: $0 port set <mjpeg|web> <port>" >&2
+        return 1
+      fi
+      local ptype="$2" port="$3"
+      if [[ "$ptype" == "mjpeg" ]]; then
+        save_config_var "MJPEG_PORT" "$port"
+      elif [[ "$ptype" == "web" ]]; then
+        save_config_var "WEB_PORT" "$port"
+      else
+        echo "Usage: $0 port set <mjpeg|web> <port>" >&2
+        return 1
+      fi
+      echo "Port set. Restart service for changes."
+      ;;
+    *)
+      echo "Usage: $0 port {show|set mjpeg <port>|set web <port>}" >&2
+      return 1
+      ;;
+  esac
+}
+
+cmd_serial() {
+  local action="${1:-show}"
+  load_config
+  case "$action" in
+    show)
+      echo "Serial Device : ${SERIAL_DEV:-not set}"
+      echo "Serial Baud   : ${SERIAL_BAUD:-115200}"
+      echo "Serial Tx     : $([[ "${SERIAL_ENABLED:-0}" == "1" ]] && echo "ON" || echo "OFF")"
+      ;;
+    set)
+      if [[ -z "${2:-}" ]]; then
+        echo "Usage: $0 serial set <device_path> [baud_rate]" >&2
+        return 1
+      fi
+      save_config_var "SERIAL_DEV" "$2"
+      if [[ -n "${3:-}" ]]; then
+        save_config_var "SERIAL_BAUD" "$3"
+      fi
+      echo "Serial device set. Restart serial tx for changes."
+      ;;
+    on)
+      save_config_var "SERIAL_ENABLED" "1"
+      echo "Serial TX enabled."
+      ;;
+    off)
+      save_config_var "SERIAL_ENABLED" "0"
+      pkill -f "mine_rs485.py" 2>/dev/null || true
+      echo "Serial TX disabled and stopped."
+      ;;
+    start)
+      save_config_var "SERIAL_ENABLED" "1"
+      nohup python3 "$RS485_SCRIPT" \
+        --device "${SERIAL_DEV}" \
+        --baud "${SERIAL_BAUD}" \
+        --json "$PROJECT_DIR/web/live_targets.json" \
+        > "$PROJECT_DIR/logs/rs485.log" 2>&1 < /dev/null &
+      local pid=$!
+      disown "$pid" 2>/dev/null || true
+      echo "RS485 transmitter started (pid=$pid)"
+      ;;
+    stop)
+      pkill -f "mine_rs485.py" 2>/dev/null || true
+      echo "RS485 transmitter stopped."
+      ;;
+    test)
+      echo "Running RS485 test transmission..."
+      python3 - "$PROJECT_DIR" "$SERIAL_DEV" <<'PYEOF'
+import json, sys, os
+proj_dir = sys.argv[1]
+ser_dev = sys.argv[2]
+scripts_dir = os.path.join(proj_dir, 'scripts')
+sys.path.insert(0, scripts_dir)
+from mine_rs485 import format_pedestrian_frame, simulate_send
+test_data = {
+    'frame_id': 999,
+    'targets': [{
+        'id': 1, 'type': 'person', 'confidence': 0.95,
+        'bbox': [100, 200, 500, 800],
+        'footpoint_px': [300, 798],
+        'bearing_deg': -5.2, 'bearing_zone': 'front',
+        'range_zone': 'near'
+    }]
+}
+for t in test_data['targets']:
+    msg = format_pedestrian_frame(t, test_data['frame_id'])
+    print(f'Would send: {msg}')
+    simulate_send(msg, ser_dev)
+print('Test done.')
+PYEOF
+      ;;
+    list)
+      echo "Available serial devices:"
+      ls -la /dev/ttyUSB* /dev/ttyAMA* /dev/ttyS* 2>/dev/null || echo "  (none found)"
+      ;;
+    *)
+      echo "Usage: $0 serial {show|set <dev> [baud]|on|off|start|stop|test|list}" >&2
+      return 1
+      ;;
+  esac
+}
+
+cmd_model() {
+  local action="${1:-show}"
+  load_config
+  case "$action" in
+    show)
+      echo "Model: ${MODEL_PATH:-}"
+      if [[ -L "${MODEL_PATH:-}" ]] || [[ -f "${MODEL_PATH:-}" ]]; then
+        ls -la "$MODEL_PATH" 2>/dev/null
+      fi
+      ;;
+    set)
+      if [[ -z "${2:-}" ]]; then
+        echo "Usage: $0 model set <path/to/model.rknn>" >&2
+        ls -la "$PROJECT_DIR/models/"*.rknn 2>/dev/null
+        return 1
+      fi
+      save_config_var "MODEL_PATH" "$2"
+      echo "Model set. Restart service for changes."
+      ;;
+    list)
+      echo "Available models:"
+      ls -la "$PROJECT_DIR/models/"*.rknn 2>/dev/null || echo "  (none)"
+      ;;
+    *)
+      echo "Usage: $0 model {show|set <path>|list}" >&2
+      return 1
+      ;;
+  esac
+}
+
+cmd_config() {
+  load_config
+  echo "Config file: $CONFIG_FILE"
+  echo "----------------------------------------"
+  cat "$CONFIG_FILE"
+}
+
+cmd_help() {
+  echo "Mine Pedestrian Control Tool"
+  echo ""
+  echo "Usage: mine_control <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  status                  Show full system status"
+  echo "  start                   Start all services"
+  echo "  stop                    Stop all services"
+  echo "  restart                 Restart all services"
+  echo ""
+  echo "  ip show                 Show current stream IP"
+  echo "  ip set <ip>             Set stream IP manually"
+  echo "  ip auto                 Auto-detect WiFi IP"
+  echo ""
+  echo "  port show               Show current ports"
+  echo "  port set mjpeg <port>   Set MJPEG stream port"
+  echo "  port set web <port>     Set web server port"
+  echo ""
+  echo "  serial show             Show RS485 serial config"
+  echo "  serial set <dev> [baud] Set serial device and baud"
+  echo "  serial on/off           Enable/disable serial TX"
+  echo "  serial start/stop       Start/stop RS485 sender"
+  echo "  serial test             Send a test detection frame"
+  echo "  serial list             List available serial devices"
+  echo ""
+  echo "  model show              Show current model"
+  echo "  model set <path>        Set model path"
+  echo "  model list              List available models"
+  echo ""
+  echo "  config                  Show full config file"
+  echo "  help                    This help"
+}
+
+# --- main ---
+ensure_config
+
+CMD="${1:-status}"
+case "$CMD" in
+  status)   cmd_status ;;
+  start)    cmd_start ;;
+  stop)     cmd_stop ;;
+  restart)  cmd_restart ;;
+  ip)       cmd_ip "${2:-show}" "${3:-}" ;;
+  port)     cmd_port "${2:-show}" "${3:-}" "${4:-}" ;;
+  serial)   cmd_serial "${2:-show}" "${3:-}" "${4:-}" ;;
+  model)    cmd_model "${2:-show}" "${3:-}" ;;
+  config)   cmd_config ;;
+  help|--help|-h) cmd_help ;;
+  *)
+    echo "Unknown command: $CMD" >&2
+    cmd_help
+    exit 1
+    ;;
+esac

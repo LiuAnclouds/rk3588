@@ -23,3 +23,6 @@ __pycache__/
 # Temporary files
 *.tmp
 *.log
+
+# Runtime config (keep template only)
+config/mine_config.conf

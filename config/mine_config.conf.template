@@ -1,0 +1,13 @@
+# Mine Pedestrian Config Template
+# Copy this file to mine_config.conf and edit as needed.
+#   cp config/mine_config.conf.template config/mine_config.conf
+
+STREAM_IP=auto
+MJPEG_PORT=8090
+WEB_PORT=8080
+CAMERA_INDEX=0
+MODEL_PATH=/home/orangepi/moonxkj/mine_pedestrian/models/current_seg.rknn
+SERIAL_DEV=/dev/ttyUSB0
+SERIAL_BAUD=115200
+SERIAL_ENABLED=0
+WRITE_SNAPSHOT=0

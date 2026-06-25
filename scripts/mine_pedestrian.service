@@ -1,0 +1,19 @@
+[Unit]
+Description=Mine Pedestrian Vision Service
+After=network.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=forking
+User=orangepi
+WorkingDirectory=/home/orangepi/moonxkj/mine_pedestrian
+ExecStart=/home/orangepi/moonxkj/mine_pedestrian/scripts/mine_control start
+ExecStop=/home/orangepi/moonxkj/mine_pedestrian/scripts/mine_control stop
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/orangepi/moonxkj/mine_pedestrian/logs/service.log
+StandardError=append:/home/orangepi/moonxkj/mine_pedestrian/logs/service.log
+Environment=LD_LIBRARY_PATH=/opt/MVS/lib/aarch64:/home/orangepi/moonxkj/mine_pedestrian/lib
+
+[Install]
+WantedBy=multi-user.target
