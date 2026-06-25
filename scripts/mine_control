@@ -223,29 +223,19 @@ cmd_serial() {
       ;;
     test)
       echo "Running RS485 test transmission..."
-      python3 - "$PROJECT_DIR" "$SERIAL_DEV" <<'PYEOF'
-import json, sys, os
-proj_dir = sys.argv[1]
-ser_dev = sys.argv[2]
-scripts_dir = os.path.join(proj_dir, 'scripts')
-sys.path.insert(0, scripts_dir)
-from mine_rs485 import format_pedestrian_frame, simulate_send
-test_data = {
-    'frame_id': 999,
-    'targets': [{
-        'id': 1, 'type': 'person', 'confidence': 0.95,
-        'bbox': [100, 200, 500, 800],
-        'footpoint_px': [300, 798],
-        'bearing_deg': -5.2, 'bearing_zone': 'front',
-        'range_zone': 'near'
-    }]
-}
-for t in test_data['targets']:
-    msg = format_pedestrian_frame(t, test_data['frame_id'])
-    print(f'Would send: {msg}')
-    simulate_send(msg, ser_dev)
-print('Test done.')
+      python3 - "$PROJECT_DIR" <<'PYEOF'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts"))
+from mine_rs485 import format_frame
+for detected in [True, False]:
+    msg = format_frame(999, detected)
+    print(f"  {msg.strip()}")
+print("Test done.")
 PYEOF
+      ;;
+    list)
+      echo "Available serial devices:"
+      ls -la /dev/ttyUSB* /dev/ttyAMA* /dev/ttyS* 2>/dev/null || echo "  (none found)"
       ;;
     list)
       echo "Available serial devices:"

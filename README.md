@@ -219,7 +219,7 @@ Orange Pi USB口 ──USB线──▶ [CH340/FT232 USB转485模块]
 ### 协议格式 (NMEA风格ASCII)
 
 ```
-$PED,<frame_id>,<id>,<confidence>,<x1>,<y1>,<x2>,<y2>,<foot_x>,<foot_y>,<bearing>,<bearing_zone>,<range_zone>*<checksum>\r\n
+$PED,<frame_id>,<detected>*<checksum>\r\n
 ```
 
 ### 字段说明
@@ -227,28 +227,21 @@ $PED,<frame_id>,<id>,<confidence>,<x1>,<y1>,<x2>,<y2>,<foot_x>,<foot_y>,<bearing
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `frame_id` | int | 帧序列号，递增 |
-| `id` | int | 当前帧内目标编号，从1开始。无目标时为0 |
-| `confidence` | float | 置信度 0.000~1.000 |
-| `x1, y1, x2, y2` | int | 检测框左上/右下像素坐标 |
-| `foot_x, foot_y` | int | 脚底中心点像素坐标（可用于测距标定） |
-| `bearing` | float | 方位角(度)，0=正前方，负=左侧，正=右侧 |
-| `bearing_zone` | str | 方位分区: `left` / `front` / `right` |
-| `range_zone` | str | 距离分区: `near` / `mid` / `far` |
+| `detected` | int | `1` = 检测到至少一个行人，`0` = 无行人 |
 | `checksum` | hex | `$`和`*`之间所有字符的 XOR，大写十六进制 |
+
+协议极简：只发一个布尔位告诉下位机有没有人，其余检测详情仍可通过 `web/live_targets.json` 获取。
 
 ### 实际报文示例
 
-有目标时：
+检测到人：
 ```
-$PED,134820,1,0.446,912,409,1277,1010,1094,1009,24.8,right,near*3A\r\n
+$PED,134820,1*59\r\n
 ```
-- 帧号134820，第1个目标，置信度44.6%
-- bbox: (912,409) -> (1277,1010)，脚底: (1094,1009)
-- 方位: 右侧24.8°，距离: 近区
 
-无目标时：
+无人：
 ```
-$PED,134821,0,0,,,,,,,*2F\r\n
+$PED,134821,0*58\r\n
 ```
 
 ### 校验和计算示例 (Python)
@@ -260,20 +253,21 @@ def checksum_nmea(data):
         c ^= ord(ch)
     return f"{c:02X}"
 
-# 验证: checksum_nmea("PED,134820,1,0.446,912,409,1277,1010,1094,1009,24.8,right,near") -> "3A"
+# checksum_nmea("PED,134820,1") -> "59"
+# checksum_nmea("PED,134821,0") -> "58"
 ```
 
 ### 下位机解析示例 (C/Arduino伪代码)
 
 ```c
-// 在串口中断中接收，检测 $ 起始和 \r\n 结束
-char buf[256];
-if (sscanf(buf, "$PED,%d,%d,%f,%d,%d,%d,%d,%d,%d,%f,%[^,],%[^*]*%2X",
-    &frame_id, &id, &conf,
-    &x1, &y1, &x2, &y2,
-    &foot_x, &foot_y, &bearing,
-    bearing_zone, range_zone, &cksum) == 13) {
-    // 校验通过后处理...
+// 接收串口数据，检测 $ 起始和 \r\n 结束
+char buf[32];
+int frame_id, detected, cksum;
+if (sscanf(buf, "$PED,%d,%d*%2X", &frame_id, &detected, &cksum) == 3) {
+    // 校验通过后根据 detected 控制
+    if (detected) {
+        // 有人，触发避障/报警
+    }
 }
 ```
 
