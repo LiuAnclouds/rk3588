@@ -6,9 +6,9 @@
 ![YOLOv8 Seg](https://img.shields.io/badge/Model-YOLOv8n--seg%20INT8-yellow)
 ![Hikrobot](https://img.shields.io/badge/Camera-Hikrobot%20GigE-lightgrey)
 
-面向矿洞行人检测避障原型的边缘视觉工程。项目在 Orange Pi 5 Pro / RK3588 上接入海康威视 GigE 工业相机，使用 RKNN NPU 实时运行 YOLOv8 segmentation，输出行人框、分割 mask、脚底像素点、左右方向和近/中/远粗距离分区，并提供 MJPEG 实时可视化流。
+面向矿洞行人检测避障原型的边缘视觉工程。Orange Pi 5 Pro / RK3588 接入海康威视 GigE 工业相机，RKNN NPU 实时运行 YOLOv8 segmentation，输出行人框、分割 mask、脚底像素点、左右方向和近/中/远粗距离分区，并通过 MJPEG 流实时可视化。
 
-支持 **USB转RS485行人检测数据传输**、**开机自启动**、**可配置IP与端口**的完整部署方案。
+**开机自启动 | USB转RS485行人数据传输 | CLI统一管理 | 可配置推流IP**
 
 ## Demo
 
@@ -16,15 +16,48 @@
 | --- | --- | --- |
 | ![demo three](docs/images/mmexport1781891594276.jpg) | ![demo many](docs/images/mmexport1781891601272.jpg) | ![demo five](docs/images/mmexport1781891604099.jpg) |
 
-## Features
+## 系统架构与数据流
 
-- **实时行人检测与分割**：YOLOv8n-seg INT8 RKNN，RK3588 NPU 三核推理。
-- **工程化可视化**：MJPEG 流直接叠加检测框、mask、方向线和目标卡片。
-- **融合友好输出**：`web/live_targets.json` 输出 bbox、footpoint、bearing、range zone，可供后续雷达融合。
-- **USB转RS485数据传输**：检测到人时自动通过串口发送结构化数据帧，支持模拟模式。
-- **开机自启动**：systemd 服务，上电自动运行推理和 Web 服务。
-- **CLI管理工具**：`mine_control` 命令行统一管理 IP、端口、串口、模型等参数。
-- **可配置推流IP**：默认读取WiFi地址，支持手动设置，Web页面支持 `?ip=` 参数。
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Orange Pi 5 Pro (RK3588)                  │
+│                                                                  │
+│  ┌──────────┐    ┌──────────────────┐    ┌───────────────────┐  │
+│  │ GigE     │    │ mine_live_infer  │    │ web/              │  │
+│  │ Camera   │───▶│ (C++ RKNN NPU)   │───▶│ live_targets.json │  │
+│  │ 192.168  │    │ YOLOv8-seg 推理  │    │ live_result.jpg   │  │
+│  │ .10.2    │    └──────────────────┘    └───────┬───────────┘  │
+│  └──────────┘                                    │              │
+│                                                  │              │
+│                    ┌─────────────────────────────┘              │
+│                    │                                            │
+│         ┌──────────▼──────────┐                                 │
+│         │   MJPEG Server      │                                 │
+│         │   :8090/stream      │──── HTTP ──▶ 浏览器/客户端      │
+│         └─────────────────────┘                                 │
+│                                                                  │
+│         ┌─────────────────────┐                                 │
+│         │ mine_rs485.py       │                                 │
+│         │ 读取 live_targets.  │       USB-to-RS485              │
+│         │ json 格式化协议帧   │──────▶ /dev/ttyUSB0 ──▶ 下位机  │
+│         └─────────────────────┘        (CH340/FT232)     (PLC/  │
+│                                              │             MCU) │
+│                                          RS485 总线              │
+│                                          A+ ─── 绿/白            │
+│                                          B- ─── 绿               │
+│                                          GND ── 黑               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 数据如何通过 USB 转 RS485 发送
+
+1. **推理产出**: `mine_live_infer` (C++ NPU推理程序) 每帧将检测结果写入 `web/live_targets.json`
+2. **轮询读取**: `mine_rs485.py` 持续监控该JSON文件，发现新帧号即读取
+3. **协议封装**: 每个行人的检测信息按 NMEA 风格格式化为一帧 ASCII 报文
+4. **串口发送**: 通过 Python `pyserial` 写入 `/dev/ttyUSB0`（USB转485适配器）
+5. **RS485传输**: CH340/FT232 芯片将 USB 信号转为 RS485 差分信号 (A+/B-)，通过双绞线发送到下位机（PLC/MCU/工控机）
+
+**无适配器时自动切换模拟模式**：如果 `/dev/ttyUSB0` 不存在，程序仅在日志中打印数据帧，不会报错退出。
 
 ## Hardware
 
@@ -36,7 +69,7 @@
 | Board Wi-Fi / SSH | `192.168.1.5` |
 | Board Ethernet | `192.168.10.1/24` |
 | Camera IP | `192.168.10.2/24` |
-| RS485 | USB转RS485 (CH340/FT232等) |
+| USB-to-RS485 | CH340 / FT232 / CP2102 模块 |
 | Project path | `/home/orangepi/moonxkj/mine_pedestrian` |
 
 ## Quick Start
@@ -44,153 +77,260 @@
 ```bash
 cd /home/orangepi/moonxkj/mine_pedestrian
 
-# 拉满 CPU/NPU/DDR 频率（可选，建议演示前执行）
+# 可选：拉满 CPU/NPU/DDR 频率以提高推理帧率
 echo orangepi | sudo -S ./scripts/performance_mode.sh
 
-# 一键启动所有服务
+# 一键启动所有服务（推理 + MJPEG + Web + RS485）
 ./scripts/mine_control start
 ```
 
-打开实时流页面（自动使用配置的IP）：
+打开 Web 页面：
 
-- Web页面: <http://192.168.1.5:8080/>
-- MJPEG stream: <http://192.168.1.5:8090/stream>
-- 指定IP访问: <http://192.168.1.5:8080/?ip=192.168.1.5&port=8090>
+| URL | 说明 |
+| --- | --- |
+| `http://192.168.1.5:8080/` | 全屏实时流页面 |
+| `http://192.168.1.5:8090/stream` | 原始 MJPEG 流 |
+| `http://192.168.1.5:8080/?ip=192.168.1.5&port=8090` | 手动指定推流IP和端口 |
 
-停止服务：
+停止所有服务：
 
 ```bash
 ./scripts/mine_control stop
 ```
 
-## CLI 管理工具 `mine_control`
+---
 
-安装到系统PATH后，可在任意目录使用：
+## CLI 管理工具 `mine_control` 完整参考
 
 ```bash
+# 安装为全局命令（任意目录可用）
 sudo ln -sf /home/orangepi/moonxkj/mine_pedestrian/scripts/mine_control /usr/local/bin/mine_control
+
+# 查看帮助
+mine_control help
 ```
 
-### 服务控制
+### `mine_control status` — 查看系统状态
 
 ```bash
-mine_control status      # 查看全部运行状态
-mine_control start       # 启动所有服务
-mine_control stop        # 停止所有服务
-mine_control restart     # 重启所有服务
+$ mine_control status
+========== Mine Pedestrian Status ==========
+  Stream IP:    192.168.1.5
+  MJPEG Port:   8090
+  Web Port:     8080
+  Camera Idx:   0
+  Model:        models/current_seg.rknn
+  Serial Dev:   /dev/ttyUSB0
+  Serial Baud:  115200
+  Serial Tx:    ON
+---------------------------------------------
+  Live Infer:   RUNNING (1 proc)
+  RS485 Tx:     RUNNING
+  Web Server:   RUNNING (:8080)
+=============================================
 ```
 
-### IP 管理
+### `mine_control start / stop / restart` — 服务启停
 
 ```bash
-mine_control ip show           # 查看当前IP和WiFi IP
-mine_control ip auto           # 自动检测WiFi IP并设置
-mine_control ip set 192.168.1.100  # 手动设置推流IP
+mine_control start       # 启动推理 + MJPEG + Web + RS485（根据配置）
+mine_control stop        # 停止全部
+mine_control restart     # 先停后启
 ```
 
-### 端口管理
+这三种操作与 systemd 服务独立——你可以在不重启系统的情况下手动启停。
+
+### `mine_control ip` — 推流 IP 管理
 
 ```bash
-mine_control port show                  # 查看当前端口
-mine_control port set mjpeg 8091        # 修改MJPEG流端口
-mine_control port set web 8081          # 修改Web页面端口
+mine_control ip show              # 查看当前配置的IP和WiFi实际IP
+mine_control ip auto              # 自动检测WiFi IP并写入配置
+mine_control ip set 192.168.1.100 # 手动指定IP（比如wifi换了网段）
 ```
 
-### 模型管理
+推流IP用于 Web 页面显示的 MJPEG 流地址。默认启动时自动读取 WiFi 接口的 IP 作为推流地址。如果板子没有 WiFi（比如用网线），可以用 `ip set` 手动指定。
+
+### `mine_control port` — 端口管理
 
 ```bash
-mine_control model show        # 查看当前模型
-mine_control model list        # 列出可用模型
-mine_control model set /path/to/model.rknn   # 切换模型
+mine_control port show              # 查看 MJPEG 和 Web 端口
+mine_control port set mjpeg 8091    # 把 MJPEG 流端口改成 8091
+mine_control port set web 9090      # 把 Web 页面端口改成 9090
 ```
 
-### RS485 串口数据传输
+修改端口后需要 `restart` 生效。
+
+### `mine_control model` — 模型切换
 
 ```bash
-mine_control serial show       # 查看串口配置
-mine_control serial list       # 列出可用串口设备
-mine_control serial set /dev/ttyUSB0 115200  # 设置串口设备和波特率
-mine_control serial on         # 启用串口发送
-mine_control serial start      # 启动RS485发送进程
-mine_control serial stop       # 停止RS485发送
-mine_control serial test       # 发送测试帧
-mine_control serial off        # 禁用串口发送
+mine_control model show                              # 显示当前模型路径
+mine_control model list                              # 列出 models/ 下所有 .rknn 文件
+mine_control model set models/yolov8s_seg_rk3588_fp.rknn  # 切换到高精度模型
 ```
 
-### 查看配置
+切换模型后需要 `restart` 生效。
+
+### `mine_control serial` — RS485 串口传输管理
 
 ```bash
-mine_control config            # 查看完整配置文件
+# 查看配置
+mine_control serial show          # 设备路径、波特率、开关状态
+mine_control serial list          # 列出系统所有可用串口
+
+# 配置串口
+mine_control serial set /dev/ttyUSB0 115200   # 设置设备和波特率
+mine_control serial set /dev/ttyS9 9600       # 也可用板载串口
+
+# 启停传输
+mine_control serial on            # 启用RS485发送（写入配置，开机后自动生效）
+mine_control serial off           # 禁用RS485发送
+mine_control serial start         # 立即启动发送进程
+mine_control serial stop          # 立即停止发送进程
+
+# 测试
+mine_control serial test          # 发送一条模拟检测数据用于验证
 ```
 
-## RS485 数据协议
+### `mine_control config` — 查看完整配置
 
-检测到行人时，通过串口发送 NMEA 风格数据帧：
-
-```
-$PED,<frame_id>,<id>,<confidence>,<x1>,<y1>,<x2>,<y2>,<foot_x>,<foot_y>,<bearing>,<bearing_zone>,<range_zone>*<checksum>
+```bash
+mine_control config               # 打印 config/mine_config.conf 内容
 ```
 
-示例：
+---
+
+## RS485 数据协议详解
+
+### 物理层
 
 ```
-$PED,134820,1,0.446,912,409,1277,1010,1094,1009,24.8,right,near*3A
+Orange Pi USB口 ──USB线──▶ [CH340/FT232 USB转485模块]
+                                       │
+                                  RS485 总线
+                                  A+ ━━━━━ 下位机 A+
+                                  B- ━━━━━ 下位机 B-
+                                 GND ━━━━━ 下位机 GND
 ```
 
-无目标时发送空帧：
+- 默认波特率: **115200 bps**
+- 数据位: 8，停止位: 1，无校验
+- 接线: A+接A+，B-接B-，GND接GND（**共地很重要**）
+
+### 协议格式 (NMEA风格ASCII)
 
 ```
-$PED,134821,0,0,,,,,,,*XX
+$PED,<frame_id>,<id>,<confidence>,<x1>,<y1>,<x2>,<y2>,<foot_x>,<foot_y>,<bearing>,<bearing_zone>,<range_zone>*<checksum>\r\n
 ```
 
-校验和为 `$` 和 `*` 之间字符的 XOR 结果（十六进制大写）。
+### 字段说明
 
-配置参数在 `config/mine_config.conf` 中：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `frame_id` | int | 帧序列号，递增 |
+| `id` | int | 当前帧内目标编号，从1开始。无目标时为0 |
+| `confidence` | float | 置信度 0.000~1.000 |
+| `x1, y1, x2, y2` | int | 检测框左上/右下像素坐标 |
+| `foot_x, foot_y` | int | 脚底中心点像素坐标（可用于测距标定） |
+| `bearing` | float | 方位角(度)，0=正前方，负=左侧，正=右侧 |
+| `bearing_zone` | str | 方位分区: `left` / `front` / `right` |
+| `range_zone` | str | 距离分区: `near` / `mid` / `far` |
+| `checksum` | hex | `$`和`*`之间所有字符的 XOR，大写十六进制 |
 
-```ini
-SERIAL_DEV=/dev/ttyUSB0    # 串口设备路径
-SERIAL_BAUD=115200          # 波特率
-SERIAL_ENABLED=1            # 是否启用
+### 实际报文示例
+
+有目标时：
+```
+$PED,134820,1,0.446,912,409,1277,1010,1094,1009,24.8,right,near*3A\r\n
+```
+- 帧号134820，第1个目标，置信度44.6%
+- bbox: (912,409) -> (1277,1010)，脚底: (1094,1009)
+- 方位: 右侧24.8°，距离: 近区
+
+无目标时：
+```
+$PED,134821,0,0,,,,,,,*2F\r\n
 ```
 
-如果没有硬件串口设备，程序自动进入**模拟模式**——只在日志中打印数据帧，不实际发送。
+### 校验和计算示例 (Python)
+
+```python
+def checksum_nmea(data):
+    c = 0
+    for ch in data:
+        c ^= ord(ch)
+    return f"{c:02X}"
+
+# 验证: checksum_nmea("PED,134820,1,0.446,912,409,1277,1010,1094,1009,24.8,right,near") -> "3A"
+```
+
+### 下位机解析示例 (C/Arduino伪代码)
+
+```c
+// 在串口中断中接收，检测 $ 起始和 \r\n 结束
+char buf[256];
+if (sscanf(buf, "$PED,%d,%d,%f,%d,%d,%d,%d,%d,%d,%f,%[^,],%[^*]*%2X",
+    &frame_id, &id, &conf,
+    &x1, &y1, &x2, &y2,
+    &foot_x, &foot_y, &bearing,
+    bearing_zone, range_zone, &cksum) == 13) {
+    // 校验通过后处理...
+}
+```
+
+### 模拟模式
+
+当 USB-to-RS485 适配器未插入时，`mine_rs485.py` 自动降级为**模拟模式**：
+- 数据帧仍然格式化并打印到日志 `logs/rs485.log`
+- 不会因设备不存在而报错退出
+- 插入适配器后 `mine_control serial restart` 即可切换为实际发送
+
+```bash
+# 查看RS485日志
+tail -f logs/rs485.log
+```
+
+---
 
 ## 开机自启动
 
-安装 systemd 服务：
+systemd 服务已在项目中配置好，默认安装后即启用。
 
 ```bash
+# 安装（仅需一次）
 cd /home/orangepi/moonxkj/mine_pedestrian
 sudo ./scripts/setup_autostart.sh
+
+# 手动管理
+sudo systemctl start mine_pedestrian      # 启动
+sudo systemctl stop mine_pedestrian       # 停止
+sudo systemctl status mine_pedestrian     # 状态
+sudo systemctl restart mine_pedestrian    # 重启
+sudo systemctl disable mine_pedestrian    # 取消开机自启
 ```
 
-脚本会自动安装并启用 `mine_pedestrian.service`，询问是否立即启动。
+服务启动后会依次：
+1. 启动 `mine_live_infer`（相机采集 + NPU推理 + MJPEG流）
+2. 启动 Python Web Server（8080端口）
+3. 启动 `mine_rs485.py`（如果 `SERIAL_ENABLED=1`）
 
-手动管理服务：
+**默认所有功能全部开启**，上电即用，无需手动干预。
 
-```bash
-sudo systemctl start mine_pedestrian     # 启动
-sudo systemctl stop mine_pedestrian      # 停止
-sudo systemctl status mine_pedestrian    # 查看状态
-sudo systemctl restart mine_pedestrian   # 重启
-sudo systemctl disable mine_pedestrian   # 取消自启
-```
-
-服务日志：
-
-```bash
-tail -f /home/orangepi/moonxkj/mine_pedestrian/logs/service.log
-```
+---
 
 ## Output JSON
 
-实时结果写入 `web/live_targets.json`，格式示例：
+实时检测结果写入 `web/live_targets.json`：
 
 ```json
 {
   "frame_id": 89,
   "fps": 32.15,
   "infer_ms": 22.60,
+  "timing_ms": {
+    "grab": 5.69, "preprocess": 2.31,
+    "rknn": 22.02, "postprocess": 1.46,
+    "draw_write": 27.40, "frame": 32.81
+  },
   "targets": [
     {
       "id": 1,
@@ -207,45 +347,64 @@ tail -f /home/orangepi/moonxkj/mine_pedestrian/logs/service.log
 }
 ```
 
-## Scripts
+`range_zone` 是基于脚底点在图像中的纵向位置给出的粗分区（近/中/远），可与雷达距离融合获得绝对距离。
 
-| Script | Description |
+---
+
+## 配置文件 `config/mine_config.conf`
+
+```ini
+STREAM_IP=192.168.1.5      # 推流IP（auto=自动检测WiFi）
+MJPEG_PORT=8090            # MJPEG流端口
+WEB_PORT=8080              # Web页面端口
+CAMERA_INDEX=0             # 海康相机索引
+MODEL_PATH=/home/orangepi/moonxkj/mine_pedestrian/models/current_seg.rknn
+SERIAL_DEV=/dev/ttyUSB0    # USB转485串口设备
+SERIAL_BAUD=115200         # 串口波特率
+SERIAL_ENABLED=1           # 1=开机自动启动RS485发送
+WRITE_SNAPSHOT=0           # 1=每帧保存快照图片
+```
+
+首次运行 `mine_control` 时自动生成。模板文件在 `config/mine_config.conf.template`。
+
+---
+
+## Scripts 一览
+
+| Script | 功能 |
 | --- | --- |
-| `scripts/mine_control` | **CLI管理工具** - 统一管理IP、端口、串口、模型、服务启停 |
-| `scripts/run_live_web.sh` | 启动相机实时推理、MJPEG 流和 Web 页面 |
-| `scripts/stop_live_web.sh` | 停止实时推理、Web 服务和 RS485 发送 |
-| `scripts/mine_rs485.py` | RS485 行人检测数据串口发送程序 |
-| `scripts/setup_autostart.sh` | 安装 systemd 开机自启动服务 |
-| `scripts/mine_pedestrian.service` | systemd 服务单元文件 |
-| `scripts/run_image.sh` | 对单张图片推理并保存可视化结果 |
-| `scripts/bench_images.sh` | 批量跑 `test_images`，生成展示图 |
-| `scripts/run_camera_once.sh` | 抓取一帧相机图并跑单图推理 |
-| `scripts/run_camera_loop.sh` | 旧版循环抓图推理，调试用 |
-| `scripts/run_smoke.sh` | 检查 RKNN 模型和 runtime 是否能加载 |
-| `scripts/performance_mode.sh` | 设置 CPU/NPU/DDR 等 governor 为 performance |
-| `scripts/setup_camera_net.sh` | 临时配置相机网口 IP |
+| `scripts/mine_control` | **CLI总控** — IP/端口/串口/模型 管理与服务启停 |
+| `scripts/run_live_web.sh` | 启动推理 + MJPEG流 + Web服务 |
+| `scripts/stop_live_web.sh` | 停止上述 + RS485发送 |
+| `scripts/mine_rs485.py` | **RS485发送程序** — 读JSON→格式化→串口发送 |
+| `scripts/setup_autostart.sh` | 安装 systemd 开机自启服务 |
+| `scripts/mine_pedestrian.service` | systemd unit 文件 |
+| `scripts/run_image.sh` | 单张图片推理 |
+| `scripts/bench_images.sh` | 批量推理生成demo图 |
+| `scripts/run_camera_once.sh` | 抓一帧相机图推理 |
+| `scripts/run_camera_loop.sh` | 循环抓图推理（调试用） |
+| `scripts/run_smoke.sh` | RKNN模型/runtime冒烟测试 |
+| `scripts/performance_mode.sh` | CPU/NPU/DDR调性能模式 |
+| `scripts/setup_camera_net.sh` | 配置相机网口IP |
+
+---
 
 ## Build
 
 ```bash
 cd /home/orangepi/moonxkj/mine_pedestrian
-make all
+make all          # 编译全部
+make live         # 仅编译实时推理程序
+make clean        # 清理
 ```
 
-单独编译实时程序：
-
-```bash
-make live
-```
-
-工程依赖：
-
+依赖：
 - OpenCV 4
-- Hikrobot MVS SDK: `/opt/MVS`
-- RKNN runtime: `lib/librknnrt.so`
-- RKNN C API header: `include/rknn_api.h`
-- Python 3 (RS485脚本)
-- pyserial (可选，RS485实际串口发送时需要)
+- Hikrobot MVS SDK (`/opt/MVS`)
+- RKNN Runtime (`lib/librknnrt.so`)
+- Python 3 + `pyserial`（RS485脚本，可选）
+
+---
 
 ## Project Layout
 
@@ -254,37 +413,33 @@ mine_pedestrian/
 ├── README.md
 ├── Makefile
 ├── .gitignore
-├── config/               # 运行配置文件
-│   └── mine_config.conf  # IP、端口、串口等参数
-├── src/                  # C++ source
+├── config/
+│   ├── mine_config.conf            # 运行配置（自动生成，git忽略）
+│   └── mine_config.conf.template   # 配置模板（git跟踪）
+├── src/                  # C++ 源码
 ├── scripts/              # 管理和运行脚本
-├── models/               # RKNN models
-├── include/              # RKNN API header
-├── lib/                  # project-local RKNN runtime
-├── web/                  # Web 页面和实时 JSON
+├── models/               # RKNN 模型文件
+├── include/              # RKNN API 头文件
+├── lib/                  # 项目内置 RKNN runtime
+├── web/                  # Web页面 + live_targets.json + 快照
 ├── docs/images/          # README 展示图
 ├── test_images/          # 测试图片
-├── bin/                  # 编译产物
-├── logs/                 # 运行日志
-└── outputs/              # 推理输出
+├── bin/                  # 编译产物（git忽略）
+├── logs/                 # 运行日志（git忽略）
+├── outputs/              # 推理输出
+└── MvSdkLog/             # 海康SDK日志
 ```
 
 ## Model
-
-当前默认模型：
 
 ```text
 models/current_seg.rknn -> models/yolov8n_seg_rk3588_i8.rknn
 ```
 
-已测试权衡：
-
 | Model | Notes |
 | --- | --- |
-| `yolov8n_seg_rk3588_i8.rknn` | 当前默认，速度和效果平衡最好 |
-| `yolov8s_seg_rk3588_fp.rknn` | 精度略好但实时帧率低，保留作对比 |
-
-实时相机流常见表现约 `28-32 FPS`。
+| `yolov8n_seg_rk3588_i8.rknn` | 默认，INT8量化，速度效果均衡，~30 FPS |
+| `yolov8s_seg_rk3588_fp.rknn` | FP精度更高但帧率低，备选 |
 
 ## Generate Demo Images
 
@@ -292,11 +447,22 @@ models/current_seg.rknn -> models/yolov8n_seg_rk3588_i8.rknn
 ./scripts/bench_images.sh test_images docs/images 1
 ```
 
+## Troubleshooting
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| `mine_control: command not found` | 未安装到PATH | `sudo ln -sf .../mine_control /usr/local/bin/` |
+| 串口无数据输出 | 设备不存在或未启用 | `mine_control serial list` 检查设备，`serial on` 启用 |
+| `grab timeout` | 相机未连接或IP不通 | `ping 192.168.10.2`，运行 `setup_camera_net.sh` |
+| `Invalid RKNN model version` | 系统 runtime 太旧 | 确保 `LD_LIBRARY_PATH` 包含 `lib/` 目录 |
+| Web页面看不到流 | IP或端口不对 | `mine_control ip show` 确认IP，用 `?ip=X&port=Y` 参数 |
+| git push TLS错误 | Orange Pi GnuTLS兼容问题 | `git config --global http.version HTTP/1.1` |
+| RS485下位机收不到数据 | 未共地或A/B接反 | 检查GND连接，尝试A/B交换 |
+
 ## Notes
 
-- 不要直接依赖系统 `/usr/lib/librknnrt.so`，它可能太旧。
-- 相机网口建议固定为 `192.168.10.1/24`，相机固定为 `192.168.10.2/24`。
-- `footpoint_px`、`bearing_deg`、`range_zone` 是视觉侧给雷达融合的粗定位信息。
-- RS485 发送依赖 `web/live_targets.json`，确保推理服务先启动。
-- 配置文件 `config/mine_config.conf` 首次运行 `mine_control` 时自动生成。
-- `logs/`、`outputs/`、`MvSdkLog/` 是运行产物。
+- 不要依赖系统 `/usr/lib/librknnrt.so`，项目自带 `lib/librknnrt.so`。
+- 相机和板子的Ethernet网段固定：板子 `192.168.10.1/24`，相机 `192.168.10.2/24`。
+- 板子WiFi用于SSH和Web访问 (`192.168.1.5`)。
+- `footpoint_px`、`bearing_deg`、`range_zone` 是视觉侧粗定位，建议配合雷达/ToF做精确避障。
+- `logs/`、`outputs/`、`MvSdkLog/` 是运行产物，Git忽略。
