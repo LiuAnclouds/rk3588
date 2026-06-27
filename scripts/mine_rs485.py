@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
 """
 Mine Pedestrian Modbus RTU Slave (RS485)
 Monitors live_targets.json and serves detection status via Modbus RTU.

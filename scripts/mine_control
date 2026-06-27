@@ -77,7 +77,7 @@ cmd_status() {
   else
     printf "  %-13s %s\n" "Modbus Slave:" "STOPPED"
   fi
-  if pgrep -f "python3 -m http.server ${WEB_PORT:-8080}" > /dev/null; then
+  if pgrep -f "python3 -u -m http.server ${WEB_PORT:-8080}" > /dev/null; then
     printf "  %-13s %s\n" "Web Server:" "RUNNING (:${WEB_PORT:-8080})"
   else
     printf "  %-13s %s\n" "Web Server:" "STOPPED"
@@ -214,7 +214,7 @@ cmd_serial() {
       ;;
     start)
       save_config_var "SERIAL_ENABLED" "1"
-      nohup python3 "$RS485_SCRIPT" \
+      nohup python3 -u "$RS485_SCRIPT" \
         --device "${SERIAL_DEV}" \
         --baud "${SERIAL_BAUD}" \
         --json "$PROJECT_DIR/web/live_targets.json" \
@@ -233,7 +233,7 @@ cmd_serial() {
       echo "  40002  detected (0/1)"
       echo "  40003  target count"
       echo "  40004  frame_id hi"
-      echo "Test: python3 -m pip install pymodbus  # for master testing"
+      echo "Test: python3 -u -m pip install pymodbus  # for master testing"
       echo "      Then use modpoll or pymodbus console to read holding registers."
       ;;
     list)
