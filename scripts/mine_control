@@ -77,7 +77,7 @@ cmd_status() {
   else
     printf "  %-13s %s\n" "Modbus Slave:" "STOPPED"
   fi
-  if pgrep -f "python3 -u -m http.server ${WEB_PORT:-8080}" > /dev/null; then
+  if pgrep -f "http.server" > /dev/null; then
     printf "  %-13s %s\n" "Web Server:" "RUNNING (:${WEB_PORT:-8080})"
   else
     printf "  %-13s %s\n" "Web Server:" "STOPPED"
