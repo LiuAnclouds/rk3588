@@ -41,7 +41,6 @@ EOF
 
 load_config() {
   ensure_config
-  # shellcheck disable=SC1090
   source "$CONFIG_FILE"
 }
 
@@ -65,6 +64,7 @@ cmd_status() {
   printf "  %-13s %s\n" "Model:" "${MODEL_PATH:-}"
   printf "  %-13s %s\n" "Serial Dev:" "${SERIAL_DEV:-}"
   printf "  %-13s %s\n" "Serial Baud:" "${SERIAL_BAUD:-115200}"
+  printf "  %-13s %s\n" "Protocol:" "Modbus RTU 8/1/N"
   printf "  %-13s %s\n" "Serial Tx:" "$([[ "${SERIAL_ENABLED:-0}" == "1" ]] && echo "ON" || echo "OFF")"
   echo "---------------------------------------------"
   if pgrep -f "mine_live_infer" > /dev/null; then
@@ -73,9 +73,9 @@ cmd_status() {
     printf "  %-13s %s\n" "Live Infer:" "STOPPED"
   fi
   if pgrep -f "mine_rs485.py" > /dev/null; then
-    printf "  %-13s %s\n" "RS485 Tx:" "RUNNING"
+    printf "  %-13s %s\n" "Modbus Slave:" "RUNNING"
   else
-    printf "  %-13s %s\n" "RS485 Tx:" "STOPPED"
+    printf "  %-13s %s\n" "Modbus Slave:" "STOPPED"
   fi
   if pgrep -f "python3 -m http.server ${WEB_PORT:-8080}" > /dev/null; then
     printf "  %-13s %s\n" "Web Server:" "RUNNING (:${WEB_PORT:-8080})"
@@ -93,7 +93,7 @@ cmd_start() {
     "$PROJECT_DIR/scripts/run_live_web.sh"
 
   if [[ "${SERIAL_ENABLED:-0}" == "1" ]]; then
-    echo "Starting RS485 transmitter..."
+    echo "Starting Modbus RTU Slave..."
     cmd_serial start
   fi
   echo "Done."
@@ -182,9 +182,15 @@ cmd_serial() {
   load_config
   case "$action" in
     show)
-      echo "Serial Device : ${SERIAL_DEV:-not set}"
-      echo "Serial Baud   : ${SERIAL_BAUD:-115200}"
-      echo "Serial Tx     : $([[ "${SERIAL_ENABLED:-0}" == "1" ]] && echo "ON" || echo "OFF")"
+      echo "=== Modbus RTU Slave Config ==="
+      echo "  Device     : ${SERIAL_DEV:-not set}"
+      echo "  Baud Rate  : ${SERIAL_BAUD:-115200}"
+      echo "  Data/Stop  : 8/1"
+      echo "  Parity     : None"
+      echo "  Slave ID   : 2"
+      echo "  Protocol   : Modbus RTU"
+      echo "  Registers  : 40001=frame_id_lo  40002=detected  40003=count  40004=frame_id_hi"
+      echo "  Enabled    : $([[ "${SERIAL_ENABLED:-0}" == "1" ]] && echo "ON" || echo "OFF")"
       ;;
     set)
       if [[ -z "${2:-}" ]]; then
@@ -195,16 +201,16 @@ cmd_serial() {
       if [[ -n "${3:-}" ]]; then
         save_config_var "SERIAL_BAUD" "$3"
       fi
-      echo "Serial device set. Restart serial tx for changes."
+      echo "Serial device set. Restart serial for changes."
       ;;
     on)
       save_config_var "SERIAL_ENABLED" "1"
-      echo "Serial TX enabled."
+      echo "Modbus slave enabled."
       ;;
     off)
       save_config_var "SERIAL_ENABLED" "0"
       pkill -f "mine_rs485.py" 2>/dev/null || true
-      echo "Serial TX disabled and stopped."
+      echo "Modbus slave disabled and stopped."
       ;;
     start)
       save_config_var "SERIAL_ENABLED" "1"
@@ -215,27 +221,20 @@ cmd_serial() {
         > "$PROJECT_DIR/logs/rs485.log" 2>&1 < /dev/null &
       local pid=$!
       disown "$pid" 2>/dev/null || true
-      echo "RS485 transmitter started (pid=$pid)"
+      echo "Modbus RTU Slave started (pid=$pid)"
       ;;
     stop)
       pkill -f "mine_rs485.py" 2>/dev/null || true
-      echo "RS485 transmitter stopped."
+      echo "Modbus RTU Slave stopped."
       ;;
     test)
-      echo "Running RS485 test transmission..."
-      python3 - "$PROJECT_DIR" <<'PYEOF'
-import sys, os
-sys.path.insert(0, os.path.join(sys.argv[1], "scripts"))
-from mine_rs485 import format_frame
-for detected in [True, False]:
-    msg = format_frame(999, detected)
-    print(f"  {msg.strip()}")
-print("Test done.")
-PYEOF
-      ;;
-    list)
-      echo "Available serial devices:"
-      ls -la /dev/ttyUSB* /dev/ttyAMA* /dev/ttyS* 2>/dev/null || echo "  (none found)"
+      echo "Modbus RTU Register Map (Slave ID=2):"
+      echo "  40001  frame_id lo"
+      echo "  40002  detected (0/1)"
+      echo "  40003  target count"
+      echo "  40004  frame_id hi"
+      echo "Test: python3 -m pip install pymodbus  # for master testing"
+      echo "      Then use modpoll or pymodbus console to read holding registers."
       ;;
     list)
       echo "Available serial devices:"
@@ -304,11 +303,11 @@ cmd_help() {
   echo "  port set mjpeg <port>   Set MJPEG stream port"
   echo "  port set web <port>     Set web server port"
   echo ""
-  echo "  serial show             Show RS485 serial config"
+  echo "  serial show             Show Modbus RTU config"
   echo "  serial set <dev> [baud] Set serial device and baud"
-  echo "  serial on/off           Enable/disable serial TX"
-  echo "  serial start/stop       Start/stop RS485 sender"
-  echo "  serial test             Send a test detection frame"
+  echo "  serial on/off           Enable/disable Modbus slave"
+  echo "  serial start/stop       Start/stop Modbus slave"
+  echo "  serial test             Show register map"
   echo "  serial list             List available serial devices"
   echo ""
   echo "  model show              Show current model"

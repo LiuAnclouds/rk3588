@@ -199,7 +199,7 @@ mine_control config               # 打印 config/mine_config.conf 内容
 
 ---
 
-## RS485 数据协议详解
+## RS485 数据协议 — Modbus RTU
 
 ### 物理层
 
@@ -212,71 +212,59 @@ Orange Pi USB口 ──USB线──▶ [CH340/FT232 USB转485模块]
                                  GND ━━━━━ 下位机 GND
 ```
 
-- 默认波特率: **115200 bps**
-- 数据位: 8，停止位: 1，无校验
-- 接线: A+接A+，B-接B-，GND接GND（**共地很重要**）
+- **协议**: Modbus RTU
+- **从机地址**: 2
+- **波特率**: 115200 bps
+- **数据/停止/校验**: 8 / 1 / None
+- 接线: A+接A+，B-接B-，GND接GND
 
-### 协议格式 (NMEA风格ASCII)
+### Holding Register 映射 (功能码 03)
+
+Orange Pi 作为 Modbus RTU 从机，甲方主站通过 03 功能码读取保持寄存器。
+
+| 寄存器 | 地址 | 类型 | 说明 |
+|--------|------|------|------|
+| 40001 | 0x00 | uint16 | frame_id 低 16 位 |
+| 40002 | 0x01 | uint16 | 检测标志 (0=无人, 1=有人) |
+| 40003 | 0x02 | uint16 | 目标数量 |
+| 40004 | 0x03 | uint16 | frame_id 高 16 位 |
+
+### 甲方主站读取示例
 
 ```
-$PED,<frame_id>,<detected>*<checksum>\r\n
+主站 → 从机(02):  02 03 00 00 00 04 44 3A
+                   │  │  └─起始地址 0────┘ │  │
+                   │  │     └─读4个寄存器──┘ │  │
+                   │  │              └─CRC16─┘  │
+                   │  └─功能码03(读保持寄存器)   │
+                   └─从机地址2                  │
+
+从机(02) → 主站:  02 03 08 00 64 00 01 00 02 00 00 xx xx
+                   │  │  │  └────────────────┘ │     └CRC16
+                   │  │  │     寄存器值(8字节)  │
+                   │  │  └─字节数=8            │
+                   │  └─功能码03              │
+                   └─从机地址2                │
+                      frame_id=100(0x0064)    │
+                      detected=1              │
+                      count=2                 │
+                      frame_id_hi=0           │
 ```
 
-### 字段说明
+### 使用 modpoll 测试 (PC端)
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `frame_id` | int | 帧序列号，递增 |
-| `detected` | int | `1` = 检测到至少一个行人，`0` = 无行人 |
-| `checksum` | hex | `$`和`*`之间所有字符的 XOR，大写十六进制 |
-
-协议极简：只发一个布尔位告诉下位机有没有人，其余检测详情仍可通过 `web/live_targets.json` 获取。
-
-### 实际报文示例
-
-检测到人：
-```
-$PED,134820,1*59\r\n
-```
-
-无人：
-```
-$PED,134821,0*58\r\n
-```
-
-### 校验和计算示例 (Python)
-
-```python
-def checksum_nmea(data):
-    c = 0
-    for ch in data:
-        c ^= ord(ch)
-    return f"{c:02X}"
-
-# checksum_nmea("PED,134820,1") -> "59"
-# checksum_nmea("PED,134821,0") -> "58"
-```
-
-### 下位机解析示例 (C/Arduino伪代码)
-
-```c
-// 接收串口数据，检测 $ 起始和 \r\n 结束
-char buf[32];
-int frame_id, detected, cksum;
-if (sscanf(buf, "$PED,%d,%d*%2X", &frame_id, &detected, &cksum) == 3) {
-    // 校验通过后根据 detected 控制
-    if (detected) {
-        // 有人，触发避障/报警
-    }
-}
+```bash
+# 安装 modpoll
+# 读取 40001~40004 共4个寄存器
+modpoll -m rtu -a 2 -r 1 -c 4 -b 115200 -d 8 -p none <串口设备>
 ```
 
 ### 模拟模式
 
-当 USB-to-RS485 适配器未插入时，`mine_rs485.py` 自动降级为**模拟模式**：
-- 数据帧仍然格式化并打印到日志 `logs/rs485.log`
+当 USB-to-RS485 适配器未插入时，`mine_rs485.py` 自动降级为模拟模式：
+- 寄存器值仍然从 JSON 读取更新
+- 日志打印当前寄存器状态
 - 不会因设备不存在而报错退出
-- 插入适配器后 `mine_control serial restart` 即可切换为实际发送
 
 ```bash
 # 查看RS485日志
